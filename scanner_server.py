@@ -555,8 +555,7 @@ def _fire_trade_inner(alert: dict, cancel_event: threading.Event) -> None:
                     err_str  = f"code={hl_code}: {hl_msg}"
                     alert["order_result"] = f"❌ Order rejected by exchange — enter manually\n{err_str}"
                     print(f"  [trade] order rejected ({direction} {symbol}): {err_str}")
-                    send_telegram(alert)
-                    threading.Thread(target=send_reminder, args=(alert, cancel_event), daemon=True).start()
+                    # Telegram + reminder already guaranteed from scanner loop
                     try:
                         _tg_post(
                             f"⚠️ <b>Order Rejected — {direction} {symbol}</b>\n"
@@ -582,9 +581,7 @@ def _fire_trade_inner(alert: dict, cancel_event: threading.Event) -> None:
             err = _sanitize_err(str(e)[:300])
             alert["order_result"] = f"❌ Order failed (exception) — enter manually\n{err}"
             print(f"  [trade] order exception ({direction} {symbol}): {err}")
-            # Send normal alert first, then follow-up error message
-            send_telegram(alert)
-            threading.Thread(target=send_reminder, args=(alert, cancel_event), daemon=True).start()
+            # Telegram + reminder already guaranteed from scanner loop
             try:
                 _tg_post(
                     f"⚠️ <b>Order Exception — {direction} {symbol}</b>\n"
@@ -595,10 +592,17 @@ def _fire_trade_inner(alert: dict, cancel_event: threading.Event) -> None:
                 pass
             return
 
-    # Send enriched Telegram (order_result appended if set)
-    print(f"  [telegram] _fire_trade: calling send_telegram for {direction} {symbol}")
-    send_telegram(alert)
-    threading.Thread(target=send_reminder, args=(alert, cancel_event), daemon=True).start()
+    # Telegram + reminder already guaranteed from scanner loop.
+    # Send a separate follow-up only when order execution produced a result.
+    if alert.get("order_result"):
+        try:
+            _tg_post(
+                f"📋 <b>Order Result — {direction} {symbol}</b>\n"
+                + _html.escape(alert["order_result"])
+            )
+            print(f"  [telegram] order result sent — {direction} {symbol}")
+        except Exception as _or_exc:
+            print(f"  [telegram] order result send failed: {_or_exc}")
 
     # Start position monitor only for real (live) orders
     if order_placed:
@@ -634,9 +638,11 @@ _pending_lock = threading.Lock()
 def send_reminder(alert, cancel_event):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
-    # Only active sessions (EU, US, Overlap) get a reminder
-    if alert.get("session_bonus", 0) == 0:
+    # Guard: stale detection only triggers when a real alert exists
+    if not alert:
         return
+    # Full 30-min reminder only for active sessions; stale check always runs
+    _send_full_reminder = alert.get("session_bonus", 0) != 0
 
     sym   = alert["symbol"]
     d     = alert["direction"]
@@ -691,26 +697,28 @@ def send_reminder(alert, cancel_event):
 
     # Send dedicated stale Telegram immediately when price has exited valid zone
     if _stale_detected:
+        print(f"  [stale] detected — {d} {sym} price={current_price:.6g} zone=[{stale_low:.6g},{stale_high:.6g}]")
         try:
             _tg_post(f"⏰ STALE — {sym} {d} — Price exited valid zone. Cancel trigger order.")
-            print(f"  [telegram] stale alert sent {d} {sym}")
+            print(f"  [telegram] stale sent — {d} {sym}")
         except Exception as _stale_err:
-            print(f"  [telegram] stale alert error: {_stale_err}")
+            print(f"  [telegram] stale send error: {_stale_err}")
 
-    text = (
-        f"⏰ <b>REMINDER — {sym} {d}</b>\n"
-        f"Alert sent 30 min ago at {orig_time}\n"
-        f"\n"
-        f"{status1}\n"
-        f"{status2}\n"
-        f"\n"
-        f"⏱ {now_est_short()}"
-    )
-    try:
-        _tg_post(text)
-        print(f"  [telegram] reminder sent {d} {sym}")
-    except Exception as e:
-        print(f"  [telegram] reminder error: {e}")
+    if _send_full_reminder:
+        text = (
+            f"⏰ <b>REMINDER — {sym} {d}</b>\n"
+            f"Alert sent 30 min ago at {orig_time}\n"
+            f"\n"
+            f"{status1}\n"
+            f"{status2}\n"
+            f"\n"
+            f"⏱ {now_est_short()}"
+        )
+        try:
+            _tg_post(text)
+            print(f"  [telegram] reminder sent {d} {sym}")
+        except Exception as e:
+            print(f"  [telegram] reminder error: {e}")
 
 
 _lock        = threading.Lock()
@@ -1006,9 +1014,12 @@ def run_scanner():
                             cancel_event = threading.Event()
                             _pending_reminders[symbol] = cancel_event
                         _last_alert_time[_cd_key] = _now_dt
-                        print(f"  ALERT SENT: {_cd_key} at {_now_dt}")
+                        print(f"  [alert] confirmed — LONG {symbol} score={ls} eff={eff:.1f}")
                         print(f"[LONG ALERT] {symbol} score={ls}/13 eff={eff:.1f} rr={rr:.2f} tp=${tp1_gain:.2f}")
-                        threading.Thread(target=_fire_trade, args=(alert, cancel_event), daemon=True).start()
+                        threading.Thread(target=send_telegram, args=(alert,),              daemon=True).start()
+                        print(f"  [telegram] alert thread started — LONG {symbol}")
+                        threading.Thread(target=send_reminder, args=(alert, cancel_event), daemon=True).start()
+                        threading.Thread(target=_fire_trade,   args=(alert, cancel_event), daemon=True).start()
                 else:
                     pending_alerts.pop(_lpk, None)
 
@@ -1144,9 +1155,12 @@ def run_scanner():
                             cancel_event = threading.Event()
                             _pending_reminders[symbol] = cancel_event
                         _last_alert_time[_cd_key] = _now_dt
-                        print(f"  ALERT SENT: {_cd_key} at {_now_dt}")
+                        print(f"  [alert] confirmed — SHORT {symbol} score={ss} eff={eff:.1f}")
                         print(f"[SHORT ALERT] {symbol} score={ss}/12 eff={eff:.1f} rr={rr:.2f} tp=${tp1_gain:.2f}")
-                        threading.Thread(target=_fire_trade, args=(alert, cancel_event), daemon=True).start()
+                        threading.Thread(target=send_telegram, args=(alert,),              daemon=True).start()
+                        print(f"  [telegram] alert thread started — SHORT {symbol}")
+                        threading.Thread(target=send_reminder, args=(alert, cancel_event), daemon=True).start()
+                        threading.Thread(target=_fire_trade,   args=(alert, cancel_event), daemon=True).start()
                 else:
                     pending_alerts.pop(_spk, None)
 
