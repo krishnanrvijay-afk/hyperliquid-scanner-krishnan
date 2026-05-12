@@ -72,11 +72,60 @@ def _get_price(symbol: str) -> float | None:
 # ── Account ───────────────────────────────────────────────────────────────────
 
 def get_balance() -> float:
-    """Return withdrawable USDT balance."""
+    """Return available balance — probes all Hyperliquid fields for unified accounts.
+
+    Unified accounts combine spot + perp balances. We print every candidate field
+    so Railway logs show exactly which one holds the real balance.
+    """
     try:
         _, info, address = _get_clients()
+
+        # ── Perp / unified account state ─────────────────────────────────────
         state = info.user_state(address)
-        return float(state.get("withdrawable", 0) or 0)
+        print(f"  [hl] user_state keys: {list(state.keys())}")
+
+        margin_summary       = state.get("marginSummary") or {}
+        cross_margin_summary = state.get("crossMarginSummary") or {}
+        withdrawable         = float(state.get("withdrawable", 0) or 0)
+        margin_acct_value    = float(margin_summary.get("accountValue", 0) or 0)
+        cross_acct_value     = float(cross_margin_summary.get("accountValue", 0) or 0)
+
+        print(f"  [hl] marginSummary      (full) = {margin_summary}")
+        print(f"  [hl] crossMarginSummary (full) = {cross_margin_summary}")
+        print(f"  [hl] marginSummary.accountValue      = {margin_acct_value}")
+        print(f"  [hl] crossMarginSummary.accountValue = {cross_acct_value}")
+        print(f"  [hl] withdrawable                    = {withdrawable}")
+
+        # ── Spot clearinghouse state ──────────────────────────────────────────
+        spot_usdc = 0.0
+        try:
+            spot_state = info.spot_clearinghouse_state(address)
+            print(f"  [hl] spotClearinghouseState keys: {list(spot_state.keys())}")
+            for b in (spot_state.get("balances") or []):
+                coin  = b.get("coin", "")
+                total = float(b.get("total", 0) or 0)
+                hold  = float(b.get("hold", 0) or 0)
+                print(f"  [hl] spot balance — coin={coin!r} total={total} hold={hold}")
+                if coin == "USDC":
+                    spot_usdc = total
+        except Exception as spot_exc:
+            print(f"  [hl] spotClearinghouseState error: {spot_exc}")
+        print(f"  [hl] spot USDC total = {spot_usdc}")
+
+        # Return first non-zero value in priority order
+        for label, val in [
+            ("crossMarginSummary.accountValue", cross_acct_value),
+            ("marginSummary.accountValue",      margin_acct_value),
+            ("withdrawable",                    withdrawable),
+            ("spot USDC total",                 spot_usdc),
+        ]:
+            if val > 0:
+                print(f"  [hl] get_balance → using {label} = {val}")
+                return val
+
+        print("  [hl] get_balance: all fields zero — returning 0.0")
+        return 0.0
+
     except Exception as exc:
         print(f"  [hl] get_balance error: {exc}")
         return 0.0
