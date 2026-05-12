@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python scanner_server.py"
+restartPolicyType = "always"
+restartPolicyMaxRetries = 10
