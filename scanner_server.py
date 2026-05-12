@@ -38,7 +38,6 @@ TRADE_LEV_FIXED   = (5   if ACCOUNT_MODE == "SMALL"
 MIN_TP_DOLLARS    = (15  if ACCOUNT_MODE == "SMALL"
                 else 25  if ACCOUNT_MODE == "MEDIUM"
                 else 75)            # Minimum TP $ — scales with mode notional
-BTC_MIN_SCORE     = 9               # BTC requires higher score confidence
 BTC_MIN_TP        = (25.0 if ACCOUNT_MODE == "SMALL"
                 else 40.0 if ACCOUNT_MODE == "MEDIUM"
                 else 125.0)         # BTC minimum TP $ per mode
@@ -49,7 +48,7 @@ DAILY_LOSS_LIMIT  = (500  if ACCOUNT_MODE == "SMALL"
                 else 1500)          # daily loss cap before alerts pause
 BULLISH_TRENDS    = ["Strong Bull", "Bullish"]
 BEARISH_TRENDS    = ["Strong Bear", "Bearish"]
-COUNTER_TREND_MIN_SCORE = 9  # Neutral/Choppy (counter-trend) setups require this minimum score
+COUNTER_TREND_MIN_SCORE = int(os.environ.get('COUNTER_TREND_MIN_SCORE', 9))  # Neutral/Choppy (counter-trend) setups require this minimum score
 NEUTRAL_TRENDS    = ["Neutral", "Choppy"]
 TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -885,7 +884,7 @@ def run_scanner():
                 # ── LONG alert check ──────────────────────────────────────
                 long_block_reason = None
                 _lpk = f"{symbol}_LONG"
-                _score_thr = BTC_MIN_SCORE if symbol == 'BTC' else ALERT_THRESHOLD
+                _score_thr = ALERT_THRESHOLD
                 _tp_thr    = BTC_MIN_TP    if symbol == 'BTC' else MIN_TP_DOLLARS
                 if ls >= _score_thr - 1:
                     entry, sl, tp1, tp2, lev, slp = e_l, sl_l, tp1_l, tp2_l, lev_l, slp_l
@@ -1026,7 +1025,7 @@ def run_scanner():
                 # ── SHORT alert check ─────────────────────────────────────
                 short_block_reason = None
                 _spk = f"{symbol}_SHORT"
-                _score_thr = BTC_MIN_SCORE if symbol == 'BTC' else ALERT_THRESHOLD
+                _score_thr = ALERT_THRESHOLD
                 _tp_thr    = BTC_MIN_TP    if symbol == 'BTC' else MIN_TP_DOLLARS
                 if ss >= _score_thr - 1:
                     entry, sl, tp1, tp2, lev, slp = e_s, sl_s, tp1_s, tp2_s, lev_s, slp_s
@@ -2657,7 +2656,7 @@ class Handler(BaseHTTPRequestHandler):
             def _eval_dir(sym, score, eff, is_misaligned, j5_val, j_thr,
                           depth_val, tp_gain, ctr_thr, long_side):
                 """Evaluate all gates for one direction; return structured dict."""
-                _score_thr = BTC_MIN_SCORE if sym == 'BTC' else ALERT_THRESHOLD
+                _score_thr = ALERT_THRESHOLD
                 _tp_thr    = BTC_MIN_TP    if sym == 'BTC' else MIN_TP_DOLLARS
 
                 bad_j = j5_val is not None and j5_val < -50
@@ -2789,7 +2788,7 @@ class Handler(BaseHTTPRequestHandler):
                 eff_s       = ss + bonus
                 is_long_mis  = trend_str in BEARISH_TRENDS
                 is_short_mis = trend_str in BULLISH_TRENDS
-                _score_thr  = BTC_MIN_SCORE if sym == 'BTC' else ALERT_THRESHOLD
+                _score_thr  = ALERT_THRESHOLD
                 # C6: Choppy+ADX>25 → standard threshold; Choppy+ADX<=25 or Neutral → 9
                 _ctr_l = (
                     _score_thr            if trend_str == "Choppy" and adx_val is not None and adx_val > 25
@@ -2842,7 +2841,6 @@ class Handler(BaseHTTPRequestHandler):
                 "session_bonus":  round(bonus, 1),
                 "real_thresholds": {
                     "score":                    ALERT_THRESHOLD,
-                    "btc_score":                BTC_MIN_SCORE,
                     "j_long_must_be_below":     15,
                     "j_short_must_be_above":    85,
                     "depth_pct":                70,
