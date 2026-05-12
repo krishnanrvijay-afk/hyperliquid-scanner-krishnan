@@ -291,7 +291,7 @@ def send_telegram(alert):
     text = (
         f"{tier_label} {d} — {sym}\n"
         f"\n"
-        f"Score: {score}/{'13' if d == 'long' else '12'}\n"
+        f"Score: {score}/{'13' if d == 'LONG' else '12'}\n"
         f"Trend: {trend_emoji} {trend}\n"
         f"5m KDJ J: {j5_str}\n"
         f"📊 ADX: {adx_str} — {'Trending' if adx is not None and adx > 25 else 'Ranging'}\n"
@@ -331,11 +331,23 @@ def send_telegram(alert):
     if order_result:
         text += f"\n\n━━━ ORDER EXECUTION ━━━\n{_html.escape(order_result)}"
 
+    print(f"  [telegram] building message: {d} {sym} score={score}")
+    _msg_len = len(text)
+    if _msg_len > 4000:
+        print(f"  [telegram] WARNING: message is {_msg_len} chars — truncating to 4000")
+        text = text[:3950] + "\n…[truncated — message too long]"
+    else:
+        print(f"  [telegram] message length: {_msg_len} chars — OK")
     try:
         _tg_post(text)
         print(f"  [telegram] sent {d} {sym} tier={tier_label} margin={tiered_margin} lev={tiered_lev}x")
     except Exception as e:
-        print(f"  [telegram] error: {e}")
+        _tg_resp = getattr(getattr(e, "response", None), "text", "") or ""
+        print(f"  [telegram] SEND FAILED — {type(e).__name__}: {e}")
+        if _tg_resp:
+            print(f"  [telegram] API response body: {_tg_resp[:500]}")
+        else:
+            print(f"  [telegram] (no API response body — likely a network/timeout error)")
 
 
 # ── Trade state persistence ───────────────────────────────────────────────────
@@ -489,6 +501,19 @@ def _fire_trade(alert: dict, cancel_event: threading.Event) -> None:
       4. If a real order was placed successfully, start monitor_position thread.
       5. Always start the 30-min send_reminder thread.
     """
+    _ft_sym = alert.get("symbol", "?")
+    _ft_dir = alert.get("direction", "?")
+    print(f"  [_fire_trade] started: {_ft_dir} {_ft_sym}")
+    try:
+        _fire_trade_inner(alert, cancel_event)
+    except Exception as _ft_exc:
+        print(f"  [_fire_trade] UNHANDLED EXCEPTION for {_ft_dir} {_ft_sym}: "
+              f"{type(_ft_exc).__name__}: {_ft_exc}")
+        import traceback
+        traceback.print_exc()
+
+
+def _fire_trade_inner(alert: dict, cancel_event: threading.Event) -> None:
     direction = alert["direction"]
     symbol    = alert["symbol"]
     entry     = alert["entry"]
@@ -571,6 +596,7 @@ def _fire_trade(alert: dict, cancel_event: threading.Event) -> None:
             return
 
     # Send enriched Telegram (order_result appended if set)
+    print(f"  [telegram] _fire_trade: calling send_telegram for {direction} {symbol}")
     send_telegram(alert)
     threading.Thread(target=send_reminder, args=(alert, cancel_event), daemon=True).start()
 
@@ -2928,7 +2954,9 @@ def main():
     print(f"Symbols  : {', '.join(SYMBOLS)}")
     print(f"Prices   : every {PRICE_INTERVAL}s   (times in EST)")
     print(f"Full scan: every {SCAN_INTERVAL}s   Threshold: {ALERT_THRESHOLD}/11   Min TP: ${MIN_TP_DOLLARS:.0f}")
-    print(f"Telegram : TOKEN={'SET' if TELEGRAM_TOKEN else '*** NOT SET ***'}  CHAT_ID={'SET' if TELEGRAM_CHAT_ID else '*** NOT SET ***'}")
+    _tok_display  = (TELEGRAM_TOKEN[:10] + "…" + TELEGRAM_TOKEN[-4:]) if len(TELEGRAM_TOKEN) > 14 else ('SET' if TELEGRAM_TOKEN else '*** NOT SET ***')
+    _chat_display = TELEGRAM_CHAT_ID if TELEGRAM_CHAT_ID else '*** NOT SET ***'
+    print(f"Telegram : TOKEN={_tok_display}  CHAT_ID={_chat_display}")
     try:
         _outbound_ip = _requests.get("https://api4.ipify.org", timeout=5).text.strip()
     except Exception:
