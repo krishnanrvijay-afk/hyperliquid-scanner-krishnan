@@ -4,6 +4,7 @@ import requests
 import socket
 import time
 import math
+import os
 from datetime import datetime
 
 # Cover DNS resolution — requests(timeout=N) does NOT protect against
