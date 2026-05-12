@@ -1193,6 +1193,10 @@ def get_state_json():
             d["short_cooldown_secs"] = _cooldown_remaining(f"{sym}_SHORT")
             d["long_pending"]  = f"{sym}_LONG"  in pending_alerts
             d["short_pending"] = f"{sym}_SHORT" in pending_alerts
+            # Guard: stale zone warning must only activate when a real alert has
+            # been sent and stored — suppress the ⚠️ for symbols with no alert history
+            if d.get("last_alert") is None:
+                d["stale"] = False
         _age = (datetime.now(tz=EST) - _last_scan_dt).total_seconds()
         return json.dumps({
             "scan_cycle":        _state["scan_cycle"],
@@ -2213,17 +2217,20 @@ function updateRow(sym, d) {{
   const lsEl    = document.getElementById('ls-' + sym);
   const ssEl    = document.getElementById('ss-' + sym);
   if (!priceEl) return;
+  // Guard: stale zone warning only activates when a real entry alert has been
+  // stored for this symbol — prevents false positives on symbols with no alerts
+  const _stale = d.stale && (d.last_alert != null);
   if (d.price != null) {{
-    const newP = '$' + parseFloat(parseFloat(d.price).toPrecision(6)) + (d.stale ? ' ⚠️' : '');
+    const newP = '$' + parseFloat(parseFloat(d.price).toPrecision(6)) + (_stale ? ' ⚠️' : '');
     if (priceEl.textContent !== newP) {{
       priceEl.textContent = newP;
-      if (!d.stale) {{
+      if (!_stale) {{
         priceEl.classList.remove('flash');
         void priceEl.offsetWidth;
         priceEl.classList.add('flash');
       }}
     }}
-  }} else if (d.stale) {{
+  }} else if (_stale) {{
     priceEl.textContent = '⚠️ stale';
   }}
   const _estH  = parseInt(new Intl.DateTimeFormat('en-US',{{hour:'numeric',hour12:false,timeZone:'America/New_York'}}).format(new Date()));
