@@ -668,7 +668,9 @@ def send_reminder(alert, cancel_event):
         _sl = alert.get("sl", entry)
         stale_low, stale_high = calc_stale_zone(entry, _sl, d)
 
+    _stale_detected = False
     if current_price < stale_low:
+        _stale_detected = True
         if d == "LONG":
             status1 = "🚫 STALE — Setup failed"
             status2 = f"Price dropped below {fp(stale_low)}\nCancel trigger order"
@@ -676,6 +678,7 @@ def send_reminder(alert, cancel_event):
             status1 = "🚫 STALE — Entry missed"
             status2 = f"Price dropped below {fp(stale_low)} before fill\nCancel trigger order — do not chase"
     elif current_price > stale_high:
+        _stale_detected = True
         if d == "LONG":
             status1 = "🚫 STALE — Entry missed"
             status2 = f"Price ripped above {fp(stale_high)} before fill\nCancel trigger order — do not chase"
@@ -685,6 +688,14 @@ def send_reminder(alert, cancel_event):
     else:
         status1 = "✅ ACTIVE — Price within entry zone"
         status2 = f"{fp(stale_low)} ← {fp(current_price)} → {fp(stale_high)}"
+
+    # Send dedicated stale Telegram immediately when price has exited valid zone
+    if _stale_detected:
+        try:
+            _tg_post(f"⏰ STALE — {sym} {d} — Price exited valid zone. Cancel trigger order.")
+            print(f"  [telegram] stale alert sent {d} {sym}")
+        except Exception as _stale_err:
+            print(f"  [telegram] stale alert error: {_stale_err}")
 
     text = (
         f"⏰ <b>REMINDER — {sym} {d}</b>\n"
@@ -833,7 +844,9 @@ def run_scanner():
                 _tm_s, _tlv_s, _ = get_tier(ss)
                 tp_dollar_long  = _tm_l * _tlv_l * _tp1_pct_l
                 tp_dollar_short = _tm_s * _tlv_s * _tp1_pct_s
-                tp_dollar = tp_dollar_long if ls >= ss else tp_dollar_short
+                # Use max() so TP$ reflects the better side — avoids all symbols
+                # showing identical values when long SL is floor-capped for all three
+                tp_dollar = max(tp_dollar_long, tp_dollar_short)
                 _raw_liq_l = e_l * (1 - 1 / lev_l + 0.005) if lev_l > 0 else 0
                 liq_l      = _raw_liq_l if _raw_liq_l > 0 else None  # None = unliquidatable (lev < ~1×)
                 _raw_liq_s = e_s * (1 + 1 / lev_s - 0.005) if lev_s > 0 else 0
